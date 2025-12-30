@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oh! Whole | 全人实验室</title>
+    <!-- 保持原有的 CSS 和库引用 -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@100;300;400;500;700;900&family=Noto+Serif+SC:wght@300;400;700&family=Reenie+Beanie&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Rock+Salt&display=swap" rel="stylesheet">
-
     <style>
+        /* 保持原有的样式 */
         body { font-family: 'Noto Sans SC', sans-serif; background-color: #f4f4f0; color: #1a1a1a; overflow-x: hidden; overscroll-behavior: none; }
         .font-serif-sc { font-family: 'Noto Serif SC', serif; }
         .font-graffiti { font-family: 'Reenie Beanie', cursive; }
@@ -55,91 +55,120 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        // --- 核心配置 ---
-        // 指向你已经部署好的腾讯云后端
+        // --- 核心配置 [重要修改] ---
+        // 这里必须指向你的腾讯云真实域名，而不是 localhost
         const BACKEND_URL = "https://api.ngo-planner.cn"; 
-        const apiKey = ""; // 环境变量占位符
+        
+        // --- 数据加载器 ---
+        const DataLoader = {
+            load: async () => {
+                try {
+                    // 尝试从后端获取动态配置的内容
+                    const response = await fetch(`${BACKEND_URL}/api/content`);
+                    if (!response.ok) throw new Error("Backend content unavailable");
+                    const data = await response.json();
+                    return data;
+                } catch (e) {
+                    console.log("Using local default data because backend is unreachable:", e);
+                    return null; 
+                }
+            }
+        };
 
         // --- 服务层：真实后端接口 ---
         const AuthService = {
             STORAGE_KEY_PREFIX: 'ohwhole_user_',
             
             // 注册
-            register: async (username, password) => {
-                // 注意：这里为了演示前端逻辑，暂时模拟成功。
-                // 如果你的后端还没有写具体的 register 接口，这行 fetch 会 404。
-                // 为了让你现在能看到效果，我们先模拟一个延迟成功。
-                // 真实对接时请解开下面的 fetch 注释。
-                
-                /* const res = await fetch(`${BACKEND_URL}/api/register`, {
+            register: async (username, password, contact) => {
+                const res = await fetch(`${BACKEND_URL}/api/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, contact })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message);
+                return { username, message: "注册成功" };
+            },
+
+            // 登录
+            login: async (username, password) => {
+                const res = await fetch(`${BACKEND_URL}/api/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
                 });
                 const data = await res.json();
                 if (!data.success) throw new Error(data.message);
-                */
                 
-                await new Promise(r => setTimeout(r, 800)); // 模拟网络延迟
-                // 简单把用户存本地，模拟注册成功
-                localStorage.setItem(AuthService.STORAGE_KEY_PREFIX + username, JSON.stringify({ password }));
-                return { username, message: "注册成功 (模拟模式)" };
+                // 登录成功后，从本地存储恢复用户的 API Config (因为后端不存用户的 Key)
+                const key = AuthService.STORAGE_KEY_PREFIX + username;
+                const localData = localStorage.getItem(key);
+                let apiConfig = null;
+                if (localData) {
+                    try { apiConfig = JSON.parse(localData).apiConfig; } catch(e){}
+                }
+                
+                return { username, apiConfig };
             },
 
-            // 登录
-            login: async (username, password) => {
-                // 同样，先模拟登录，让你能进入系统体验
-                /*
-                const res = await fetch(`${BACKEND_URL}/api/login`, { ... });
-                */
-               
-                await new Promise(r => setTimeout(r, 600));
-                const localUser = localStorage.getItem(AuthService.STORAGE_KEY_PREFIX + username);
-                if (!localUser) throw new Error("用户不存在 (模拟)");
-                // 真实场景下，你会从后端获取 token
-                
-                return { username, apiConfig: null };
-            },
-
+            // 保存用户配置 (API Key 仅保存在本地 localStorage)
             saveUserData: (username, newData) => {
                 const key = AuthService.STORAGE_KEY_PREFIX + username;
                 let currentData = {};
                 try { currentData = JSON.parse(localStorage.getItem(key)) || {}; } catch(e){}
+                
                 const updatedUser = { ...currentData, ...newData };
                 localStorage.setItem(key, JSON.stringify(updatedUser));
                 return { username, ...updatedUser };
             },
 
+            // 提交推荐文献 (发送给后端)
             submitRecommendation: async (data, user) => {
-                // 这里我们尝试真的发给后端，测试连接！
-                // 如果后端只有 /api/status 接口，这个可能会失败，但我们可以先试试 ping
-                try {
-                    await fetch(`${BACKEND_URL}/api/status`); // 只是为了测试连通性
-                    console.log("后端连接正常");
-                } catch(e) {
-                    console.warn("后端连接失败，但不影响前端演示");
-                }
-                
-                await new Promise(r => setTimeout(r, 1000));
+                const payload = { ...data, username: user ? user.username : 'guest' };
+                const res = await fetch(`${BACKEND_URL}/api/submit_recommendation`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+                if (!result.success) throw new Error("提交失败");
                 return { success: true };
             }
         };
 
+        // --- AI API Helper ---
         const callLLM = async (prompt, systemInstruction = "", userConfig) => {
-            if (!userConfig || !userConfig.key) throw new Error("请先登录并配置您的 API Key 以使用智能功能。");
+            if (!userConfig || !userConfig.key) {
+                throw new Error("请先登录并配置您的 API Key 以使用智能功能。");
+            }
             try {
                 if (userConfig.provider === 'gemini') {
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${userConfig.key}`, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], systemInstruction: { parts: [{ text: systemInstruction }] } })
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            systemInstruction: { parts: [{ text: systemInstruction }] }
+                        })
                     });
                     if (!response.ok) throw new Error(`Gemini Error: ${response.status}`);
                     const data = await response.json();
                     return data.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini 暂无响应";
                 } else if (userConfig.provider === 'deepseek') {
                     const response = await fetch('https://api.deepseek.com/chat/completions', {
-                        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userConfig.key}` },
-                        body: JSON.stringify({ model: "deepseek-chat", messages: [ { role: "system", content: systemInstruction }, { role: "user", content: prompt } ] })
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${userConfig.key}`
+                        },
+                        body: JSON.stringify({
+                            model: "deepseek-chat",
+                            messages: [
+                                { role: "system", content: systemInstruction },
+                                { role: "user", content: prompt }
+                            ]
+                        })
                     });
                      if (!response.ok) throw new Error(`DeepSeek Error: ${response.status}`);
                     const data = await response.json();
@@ -151,7 +180,7 @@
             }
         };
 
-        // --- Icons & Components ---
+        // --- 图标组件 ---
         const Icons = {
             ArrowRight: (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>,
             X: (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>,
@@ -205,32 +234,10 @@
             Puzzle: (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19.439 15.424a1 1 0 0 0-1.026 1.613l.964.964a2 2 0 0 1-2.828 2.828l-.964-.964a1 1 0 0 0-1.613 1.026V21a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-.586a1 1 0 0 0-1.613-1.026l-.964.964a2 2 0 0 1 2.828-2.828l.964.964a1 1 0 0 0 1.026-1.613H3a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h.586a1 1 0 0 0 1.026-1.613l-.964-.964a2 2 0 0 1 2.828-2.828l.964.964a1 1 0 0 0 1.613-1.026V3a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v.586a1 1 0 0 0 1.613 1.026l.964-.964a2 2 0 0 1 2.828 2.828l-.964.964a1 1 0 0 0 1.026 1.613H21a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-.561Z"/></svg>,
             Star: (props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         };
+        const BearLogo = (props) => (<svg {...props} viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 35 C 10 25, 10 10, 30 15 C 40 18, 60 18, 70 15 C 90 10, 90 25, 80 35 C 90 55, 80 85, 50 85 C 20 85, 10 55, 20 35 Z" /><path d="M28 20 C 25 25, 20 25, 22 30" opacity="0.5"/><path d="M72 20 C 75 25, 80 25, 78 30" opacity="0.5"/><circle cx="38" cy="45" r="2.5" fill="currentColor" stroke="none"/><circle cx="62" cy="45" r="2.5" fill="currentColor" stroke="none"/><ellipse cx="50" cy="58" rx="8" ry="6" /><path d="M50 64 L 50 70 Q 40 75 35 68 M 50 70 Q 60 75 65 68" /></svg>);
+        const RunningManIcon = () => (<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-run"><path d="M19 17l-2-4-3 4" /><path d="M13 13l-4-6-4 4" /><path d="M11 11l2 5-2 5" /><path d="M9 7l4 4 5-3" /><circle cx="9" cy="4" r="3" /></svg>);
 
-        // --- 2. 熊头 LOGO 组件 ---
-        const BearLogo = (props) => (
-            <svg {...props} viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 35 C 10 25, 10 10, 30 15 C 40 18, 60 18, 70 15 C 90 10, 90 25, 80 35 C 90 55, 80 85, 50 85 C 20 85, 10 55, 20 35 Z" />
-                <path d="M28 20 C 25 25, 20 25, 22 30" opacity="0.5"/>
-                <path d="M72 20 C 75 25, 80 25, 78 30" opacity="0.5"/>
-                <circle cx="38" cy="45" r="2.5" fill="currentColor" stroke="none"/>
-                <circle cx="62" cy="45" r="2.5" fill="currentColor" stroke="none"/>
-                <ellipse cx="50" cy="58" rx="8" ry="6" />
-                <path d="M50 64 L 50 70 Q 40 75 35 68 M 50 70 Q 60 75 65 68" />
-            </svg>
-        );
-
-        // --- 3. 奔跑的小人图标 ---
-        const RunningManIcon = () => (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-run">
-                 <path d="M19 17l-2-4-3 4" />
-                 <path d="M13 13l-4-6-4 4" />
-                 <path d="M11 11l2 5-2 5" />
-                 <path d="M9 7l4 4 5-3" />
-                 <circle cx="9" cy="4" r="3" />
-            </svg>
-        );
-
-        // --- 4. 涂鸦风 SVG 头像库 ---
+        // --- 静态数据 (恢复完整数据) ---
         const doodleAvatars = [
             <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="50" cy="50" r="40" /><path d="M30 45 Q35 40 40 45" /> <path d="M60 45 Q65 40 70 45" /><path d="M45 65 Q50 75 55 65" /><path d="M20 30 Q50 10 80 30 Q90 50 80 60" strokeDasharray="4 4" /></svg>,
             <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="20" y="20" width="60" height="70" rx="10" /><circle cx="35" cy="45" r="8" /> <circle cx="65" cy="45" r="8" /><line x1="43" y1="45" x2="57" y2="45" /><line x1="40" y1="70" x2="60" y2="70" /><path d="M20 40 L10 40" /> <path d="M80 40 L90 40" /></svg>,
@@ -243,36 +250,9 @@
             <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect x="25" y="25" width="50" height="60" rx="20" /><rect x="20" y="40" width="25" height="15" rx="5" /><rect x="55" y="40" width="25" height="15" rx="5" /><line x1="45" y1="47" x2="55" y2="47" /><path d="M40 75 Q50 80 60 75" /></svg>,
             <svg viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M70 20 A 40 40 0 1 1 40 90 A 30 30 0 1 0 70 20 Z" /><circle cx="45" cy="45" r="3" fill="currentColor"/><path d="M55 65 Q45 70 35 60" /></svg>
         ];
-
-        // --- 5. 数据配置 ---
-        const categories = [
-            { id: "all", name: "全息视图 · All Dimensions", icon: Icons.All, color: "bg-black text-white", border: "border-black" },
-            { id: "awakening", name: "觉醒 · 存在根基", desc: "哲学追问：为何存在？", icon: Icons.Zap, color: "bg-neon-blue text-white", border: "border-blue-700" },
-            { id: "integration", name: "整合 · 内在秩序", desc: "心理建构：我是谁？", icon: Icons.Puzzle, color: "bg-neon-yellow text-black", border: "border-yellow-600" },
-            { id: "navigation", name: "导航 · 时代坐标", desc: "社会定位：身在何处？", icon: Icons.Map, color: "bg-neon-orange text-white", border: "border-orange-600" },
-            { id: "evolution", name: "进化 · 心智重塑", desc: "教育生长：如何生长？", icon: Icons.Sprout, color: "bg-neon-pink text-white", border: "border-pink-600" },
-            { id: "creation", name: "创造 · 价值回归", desc: "经济实践：以何为生？", icon: Icons.Briefcase, color: "bg-neon-green text-black", border: "border-green-600" },
-        ];
-
-        // 影像流图片库 (完善结构化数据，预留接口)
-        const moodImages = [
-            { id: 1, src: "https://images.unsplash.com/photo-1549490349-8643362247b5?w=600&q=80", alt: "Abstract Art 1", width: 600, height: 400 },
-            { id: 2, src: "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=600&q=80", alt: "Abstract Art 2", width: 600, height: 400 },
-            { id: 3, src: "https://images.unsplash.com/photo-1605721911519-3dfeb3be25e7?w=600&q=80", alt: "Texture 3", width: 600, height: 400 },
-            { id: 4, src: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&q=80", alt: "Fluid Art 4", width: 600, height: 400 },
-            { id: 5, src: "https://images.unsplash.com/photo-1507608616759-54f48f0af0ee?w=600&q=80", alt: "Rainy Abstract 5", width: 600, height: 400 },
-            { id: 6, src: "https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=600&q=80", alt: "Graffiti Wall 6", width: 600, height: 400 },
-            { id: 7, src: "https://images.unsplash.com/photo-1569705970380-c720e5e6f1f8?w=600&q=80", alt: "Rough Texture 7", width: 600, height: 400 },
-            { id: 8, src: "https://images.unsplash.com/photo-1550684847-75bdda21cc95?w=600&q=80", alt: "Red Abstract 8", width: 600, height: 400 },
-            { id: 9, src: "https://images.unsplash.com/photo-1574169208507-84376144848b?w=600&q=80", alt: "Structure 9", width: 600, height: 400 },
-            { id: 10, src: "https://images.unsplash.com/photo-1515462277126-2dd0c162007a?w=600&q=80", alt: "Collage 10", width: 600, height: 400 },
-            // 补充丢失的图片位
-            { id: 11, src: "https://images.unsplash.com/photo-1558591710-4b4a1ae0f04d?w=600&q=80", alt: "Minimal Lines 11", width: 600, height: 400 },
-            { id: 12, src: "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&q=80", alt: "Geometry 12", width: 600, height: 400 }
-            // TODO: 若需替换图片，请保持宽高比 3:2，推荐尺寸 600x400px
-        ];
-
-        const theories = [
+        const categories = [{ id: "all", name: "全息视图 · All Dimensions", icon: Icons.All, color: "bg-black text-white", border: "border-black" },{ id: "awakening", name: "觉醒 · 存在根基", desc: "哲学追问：为何存在？", icon: Icons.Zap, color: "bg-neon-blue text-white", border: "border-blue-700" },{ id: "integration", name: "整合 · 内在秩序", desc: "心理建构：我是谁？", icon: Icons.Puzzle, color: "bg-neon-yellow text-black", border: "border-yellow-600" },{ id: "navigation", name: "导航 · 时代坐标", desc: "社会定位：身在何处？", icon: Icons.Map, color: "bg-neon-orange text-white", border: "border-orange-600" },{ id: "evolution", name: "进化 · 心智重塑", desc: "教育生长：如何生长？", icon: Icons.Sprout, color: "bg-neon-pink text-white", border: "border-pink-600" },{ id: "creation", name: "创造 · 价值回归", desc: "经济实践：以何为生？", icon: Icons.Briefcase, color: "bg-neon-green text-black", border: "border-green-600" }];
+        
+        const defaultTheories = [
             { id: 1, category: "awakening", keyword: "在世存在", en: "Being-in-the-world", icon: Icons.Sun, desc: "破碎的人是「常人」，整全的人是「本真」。", book: "《存在与时间》", author: "马丁·海德格尔", intro: "人被抛入世界，现代性导致我们往往按照他人期望生活（常人状态）。整全性修复，就是一条从失真的「常人」状态回归「本真存在」的路径，重新发现并选择自己的存在方式。", pdfUrl: "https://easylink.cc/preview-placeholder?name=Heidegger", color: "bg-neon-blue", textColor: "text-white" },
             { id: 2, category: "awakening", keyword: "单向度的人", en: "One-Dimensional Man", icon: Icons.Circle, desc: "恢复否定性思维，拒绝成为系统的单向度零件。", book: "《单向度的人》", author: "赫伯特·马尔库塞", intro: "发达工业社会成功压制了人们内心的否定性、批判性和超越性向度。整全性修复旨在恢复人的多维度，建立对系统的「批判距离」。", pdfUrl: "https://easylink.cc/preview-placeholder?name=Marcuse", color: "bg-neon-blue", textColor: "text-white" },
             { id: 3, category: "awakening", keyword: "劳动异化", en: "Alienation of Labor", icon: Icons.Scissors, desc: "对抗劳动产品、过程、本质与人际的四重异化。", book: "《1844年经济学哲学手稿》", author: "卡尔·马克思", intro: "工作不应成为苦役。微型修复项目是对抗异化的微型实践：让产品属于自己，过程自主控制，恢复作为人的创造性。", pdfUrl: "https://easylink.cc/preview-placeholder?name=Marx", color: "bg-neon-blue", textColor: "text-white" },
@@ -293,7 +273,22 @@
             { id: 18, category: "creation", keyword: "驱动力3.0", en: "Motivation 3.0", icon: Icons.Rocket, desc: "超越外在奖惩，依靠自主性、专精与目的感驱动。", book: "《驱动力》", author: "丹尼尔·平克", intro: "现代职场过度依赖外在奖励（驱动力2.0）。整全性修复恢复内在驱动力（3.0）：通过自主选择项目，逐步掌握技能，连接个人意义。", pdfUrl: "https://easylink.cc/preview-placeholder?name=Pink", color: "bg-neon-green", textColor: "text-black" }
         ];
 
-        const actions = [
+        const defaultMoodImages = [
+            { id: 1, src: "https://images.unsplash.com/photo-1549490349-8643362247b5?w=600&q=80", alt: "Abstract Art 1", width: 600, height: 400 },
+            { id: 2, src: "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=600&q=80", alt: "Abstract Art 2", width: 600, height: 400 },
+            { id: 3, src: "https://images.unsplash.com/photo-1605721911519-3dfeb3be25e7?w=600&q=80", alt: "Texture 3", width: 600, height: 400 },
+            { id: 4, src: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&q=80", alt: "Fluid Art 4", width: 600, height: 400 },
+            { id: 5, src: "https://images.unsplash.com/photo-1507608616759-54f48f0af0ee?w=600&q=80", alt: "Rainy Abstract 5", width: 600, height: 400 },
+            { id: 6, src: "https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=600&q=80", alt: "Graffiti Wall 6", width: 600, height: 400 },
+            { id: 7, src: "https://images.unsplash.com/photo-1569705970380-c720e5e6f1f8?w=600&q=80", alt: "Rough Texture 7", width: 600, height: 400 },
+            { id: 8, src: "https://images.unsplash.com/photo-1550684847-75bdda21cc95?w=600&q=80", alt: "Red Abstract 8", width: 600, height: 400 },
+            { id: 9, src: "https://images.unsplash.com/photo-1574169208507-84376144848b?w=600&q=80", alt: "Structure 9", width: 600, height: 400 },
+            { id: 10, src: "https://images.unsplash.com/photo-1515462277126-2dd0c162007a?w=600&q=80", alt: "Collage 10", width: 600, height: 400 },
+            { id: 11, src: "https://images.unsplash.com/photo-1558591710-4b4a1ae0f04d?w=600&q=80", alt: "Minimal Lines 11", width: 600, height: 400 },
+            { id: 12, src: "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&q=80", alt: "Geometry 12", width: 600, height: 400 }
+        ];
+
+        const defaultActions = [
             { id: 1, title: "重连身体", sub: "Body Reconnection", desc: "每天15分钟，不带目的的行走，只感受脚掌与大地的触碰。", tags: ["感知", "身体"] },
             { id: 2, title: "数字断舍离", sub: "Digital Detox", desc: "每天黄金一小时，关闭所有屏幕，用纸笔记录当下闪过的念头。", tags: ["清理", "意识"] },
             { id: 3, title: "未完成之书", sub: "The Unfinished Book", desc: "找出那本买了很久没读完的书，每天只读5页，并写下一句感悟。", tags: ["认知", "闭环"] },
@@ -306,162 +301,29 @@
             { id: 10, title: "十分钟静默", sub: "Silent Retreat", desc: "每天给自己十分钟绝对的静默，不思考，只存在。", tags: ["存在", "灵性"] },
         ];
 
-        const IntegrityQuestionnaire = ({ onComplete }) => {
-            const [step, setStep] = React.useState(0);
-            const [answers, setAnswers] = React.useState({
-                skills: [], potentials: [], connection: 3,
-                energySources: [], blockers: "", overlap: 3,
-                stuckPoint: "", fragmentation: "", resources: [],
-                confidence: 3, time: "", preference: ""
-            });
-
-             const steps = [
-                {
-                    title: "Part 1: 技能星系",
-                    desc: "点亮你的能力宇宙",
-                    content: (
-                        <div className="space-y-6">
-                            <div>
-                                <label className="block text-sm font-bold mb-2">✨ 你的高光技能 (多选 3-5 项)</label>
-                                <div className="flex flex-wrap gap-2">
-                                    {["写作与表达", "数据分析", "编程与技术", "设计与创意", "项目管理", "教学与培训", "研究分析", "沟通协调", "运营与执行"].map(opt => (
-                                        <button key={opt} onClick={() => {
-                                            const newSkills = answers.skills.includes(opt) ? answers.skills.filter(s => s !== opt) : [...answers.skills, opt];
-                                            setAnswers({...answers, skills: newSkills});
-                                        }} className={`px-3 py-1 rounded-full text-sm border transition-all ${answers.skills.includes(opt) ? 'bg-black text-white border-black' : 'bg-white text-gray-500 border-gray-300'}`}>{opt}</button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-bold mb-2">🔗 技能连接度 (1:孤岛 - 5:星系)</label>
-                                <input type="range" min="1" max="5" value={answers.connection} onChange={(e) => setAnswers({...answers, connection: e.target.value})} className="w-full accent-black"/>
-                            </div>
-                        </div>
-                    )
-                },
-                {
-                    title: "Part 2: 能量罗盘",
-                    desc: "寻找你的热情流向",
-                    content: (
-                        <div className="space-y-6">
-                            <div>
-                                <label className="block text-sm font-bold mb-2">🔥 能量源 (让你忘记时间的事)</label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {["创作新东西", "解决复杂问题", "帮助他人", "学习新知识", "身体活动", "深度思考", "与人连接", "组织整理"].map(opt => (
-                                        <button key={opt} onClick={() => {
-                                            const newEs = answers.energySources.includes(opt) ? answers.energySources.filter(e => e !== opt) : [...answers.energySources, opt];
-                                            setAnswers({...answers, energySources: newEs});
-                                        }} className={`p-2 text-left text-sm border rounded hover:bg-gray-50 transition-all ${answers.energySources.includes(opt) ? 'border-neon-orange bg-orange-50 text-neon-orange font-bold' : 'border-gray-200 text-gray-600'}`}>{opt}</button>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    )
-                },
-                {
-                    title: "Part 3: 诊断与准备",
-                    desc: "诚实面对现状",
-                    content: (
-                        <div className="space-y-6">
-                            <div>
-                                <label className="block text-sm font-bold mb-2">🚧 项目通常卡在哪一步？</label>
-                                <div className="space-y-2">
-                                    {["没意识到想法价值", "无法把想法变计划", "无法分解为行动", "开始后失去动力", "完成后无法持续"].map(opt => (
-                                        <label key={opt} className="flex items-center gap-2 cursor-pointer">
-                                            <input type="radio" name="stuck" value={opt} onChange={(e) => setAnswers({...answers, stuckPoint: e.target.value})} checked={answers.stuckPoint === opt} className="accent-black"/>
-                                            <span className="text-sm text-gray-700">{opt}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    )
-                }
-            ];
-
-            return (
-                <div className="flex flex-col h-full">
-                    <div className="flex justify-between items-center mb-6">
-                        <div><h4 className="text-xl font-black">{steps[step].title}</h4><p className="text-xs text-gray-500 font-mono-tech uppercase">{steps[step].desc}</p></div>
-                        <div className="text-2xl font-black text-gray-200">{step + 1}/{steps.length}</div>
-                    </div>
-                    <div className="flex-1 overflow-y-auto pr-2">{steps[step].content}</div>
-                    <div className="mt-6 flex justify-between">
-                        <button onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0} className={`px-4 py-2 text-sm font-bold ${step === 0 ? 'text-gray-300' : 'text-black hover:underline'}`}>Back</button>
-                        <button onClick={() => { if (step < steps.length - 1) setStep(step + 1); else onComplete(answers); }} className="px-6 py-2 bg-black text-white text-sm font-bold hover:bg-neon-blue transition-colors rounded shadow-lg">{step === steps.length - 1 ? "生成全人快照 ✨" : "Next"}</button>
-                    </div>
-                </div>
-            );
-        };
-
-        // --- 7. 模态框组件群 ---
-
-        // API 设置模态框
-        const ApiKeyModal = ({ onClose, onSave }) => {
-            const [provider, setProvider] = React.useState("gemini");
-            const [key, setKey] = React.useState("");
-
-            const handleSubmit = (e) => {
-                e.preventDefault();
-                if (key.trim()) {
-                    onSave({ provider, key });
-                    onClose();
-                }
-            };
-
-            return (
-                <div className="fixed inset-0 z-[140] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose}></div>
-                    <div className="relative bg-white w-full max-w-md p-8 shadow-2xl flex flex-col animate-fade-in-up border border-gray-200">
-                        <button onClick={onClose} className="absolute top-4 right-4"><Icons.X size={20}/></button>
-                        <h3 className="text-xl font-black mb-4 flex items-center gap-2"><Icons.Settings size={20}/> 配置 AI 引擎</h3>
-                        <p className="text-xs text-gray-500 mb-6">您的 API Key 仅加密存储在本地浏览器，不会上传至服务器。</p>
-                        
-                        <form onSubmit={handleSubmit} className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-bold mb-2 uppercase">选择模型服务商</label>
-                                <div className="flex gap-2">
-                                    <button type="button" onClick={() => setProvider("gemini")} className={`flex-1 py-2 text-sm border-2 transition-colors ${provider === 'gemini' ? 'border-neon-blue bg-neon-blue text-white' : 'border-gray-200 hover:border-gray-400'}`}>Google Gemini</button>
-                                    <button type="button" onClick={() => setProvider("deepseek")} className={`flex-1 py-2 text-sm border-2 transition-colors ${provider === 'deepseek' ? 'border-neon-blue bg-neon-blue text-white' : 'border-gray-200 hover:border-gray-400'}`}>DeepSeek</button>
-                                </div>
-                            </div>
-                            
-                            <div>
-                                <label className="block text-xs font-bold mb-2 uppercase">API Key</label>
-                                <div className="relative">
-                                    <input type="password" value={key} onChange={e => setKey(e.target.value)} className="w-full p-3 border-2 border-gray-200 focus:border-black outline-none font-mono text-sm pl-10" placeholder="sk-..." required />
-                                    <Icons.Key className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16}/>
-                                </div>
-                                <a href={provider === 'gemini' ? "https://aistudio.google.com/app/apikey" : "https://platform.deepseek.com/"} target="_blank" className="text-[10px] text-neon-blue hover:underline mt-1 inline-block">
-                                    👉 点击获取 {provider === 'gemini' ? 'Gemini' : 'DeepSeek'} API Key
-                                </a>
-                            </div>
-
-                            <button type="submit" className="w-full py-3 bg-black text-white font-bold hover:bg-neon-blue transition-colors">保存并启用 AI</button>
-                        </form>
-                    </div>
-                </div>
-            );
-        };
-
-        // 推荐表单模态框
-        const RecommendationFormModal = ({ onClose }) => {
+        // --- 所有模态框组件 (ApiKeyModal, RecommendationFormModal, etc.) ---
+        
+        const RecommendationFormModal = ({ onClose, user }) => {
             const [formData, setFormData] = React.useState({ keyword: "", book: "", author: "", desc: "", intro: "" });
             const [submitted, setSubmitted] = React.useState(false);
+            const [error, setError] = React.useState("");
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
-                await AuthService.submitRecommendation(formData);
-                setSubmitted(true);
-                setTimeout(onClose, 2000);
+                setError("");
+                try {
+                    await AuthService.submitRecommendation(formData, user);
+                    setSubmitted(true);
+                    setTimeout(onClose, 2000);
+                } catch (e) {
+                    setError(e.message);
+                }
             };
-
             return (
                 <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-white/90 backdrop-blur-xl" onClick={onClose}></div>
                     <div className="relative bg-[#f4f4f0] border-2 border-black w-full max-w-lg p-8 shadow-xl animate-fade-in-up">
                         <button onClick={onClose} className="absolute top-4 right-4"><Icons.X size={20}/></button>
-                        
                         {!submitted ? (
                             <>
                                 <h3 className="text-2xl font-black mb-6 flex items-center gap-2"><Icons.Book size={24}/> 提交推荐文献</h3>
@@ -488,6 +350,7 @@
                                         <label className="block text-xs font-bold mb-1">深度解读 (Insight)</label>
                                         <textarea required className="w-full p-2 border border-black bg-white h-24 resize-none" placeholder="为什么推荐这本书？它如何帮助全人修复？" value={formData.intro} onChange={e => setFormData({...formData, intro: e.target.value})}></textarea>
                                     </div>
+                                    {error && <div className="text-red-500 text-xs">{error}</div>}
                                     <button type="submit" className="w-full py-3 bg-black text-white font-bold hover:bg-neon-green hover:text-black transition-colors border-2 border-black">提交至知识库</button>
                                 </form>
                             </>
@@ -500,10 +363,9 @@
                         )}
                     </div>
                 </div>
-            );
+            )
         };
 
-        // 加入社群模态框
         const JoinCommunityModal = ({ onClose }) => (
             <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
                 <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose}></div>
@@ -522,7 +384,67 @@
             </div>
         );
 
-        // AIAssessmentModal (Update to use dynamic callLLM)
+        const ApiKeyModal = ({ onClose, onSave }) => {
+            const [provider, setProvider] = React.useState("gemini");
+            const [key, setKey] = React.useState("");
+            return (
+                <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+                    <div className="bg-white w-full max-w-md p-8 relative">
+                        <button onClick={onClose} className="absolute top-4 right-4"><Icons.X size={20}/></button>
+                        <h3 className="text-xl font-black mb-4 flex gap-2"><Icons.Settings size={20}/> AI 配置</h3>
+                        <p className="text-xs text-gray-500 mb-6">Key 仅保存在您的本地浏览器，我们无法查看。</p>
+                        <div className="flex gap-2 mb-4">
+                            {['gemini', 'deepseek'].map(p => (
+                                <button key={p} onClick={() => setProvider(p)} className={`flex-1 py-2 border-2 capitalize ${provider === p ? 'border-neon-blue bg-neon-blue text-white' : 'border-gray-200'}`}>{p}</button>
+                            ))}
+                        </div>
+                        <div className="relative mb-4">
+                            <input type="password" value={key} onChange={e => setKey(e.target.value)} className="w-full p-3 border-2 border-gray-200 pl-10 outline-none focus:border-black" placeholder="sk-..." />
+                            <div className="absolute left-3 top-3 text-gray-400"><Icons.Key size={16}/></div>
+                        </div>
+                        <button onClick={() => { if(key) { onSave({provider, key}); onClose(); } }} className="w-full py-3 bg-black text-white font-bold">保存并启用</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const AuthModal = ({ onClose, onLogin }) => {
+            const [isLogin, setIsLogin] = React.useState(true);
+            const [formData, setFormData] = React.useState({ username: "", password: "", contact: "" });
+            const [msg, setMsg] = React.useState("");
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setMsg("");
+                try {
+                    if (isLogin) {
+                        const user = await AuthService.login(formData.username, formData.password);
+                        onLogin(user); onClose();
+                    } else {
+                        await AuthService.register(formData.username, formData.password, formData.contact);
+                        setIsLogin(true); setMsg("注册成功，请登录");
+                    }
+                } catch (err) { setMsg(err.message); }
+            };
+
+            return (
+                <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-white/80 backdrop-blur-md">
+                    <div className="bg-white border-2 border-black p-8 w-full max-w-sm animate-fade-in-up relative">
+                        <button onClick={onClose} className="absolute top-4 right-4"><Icons.X size={20}/></button>
+                        <h3 className="text-2xl font-black mb-6">{isLogin ? "登录" : "注册"}</h3>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <input className="w-full p-3 border-2 border-gray-200 focus:border-black outline-none" placeholder="用户名" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} required />
+                            {!isLogin && <input className="w-full p-3 border-2 border-gray-200 focus:border-black outline-none" placeholder="邮箱或手机 (用于找回)" value={formData.contact} onChange={e => setFormData({...formData, contact: e.target.value})} />}
+                            <input type="password" className="w-full p-3 border-2 border-gray-200 focus:border-black outline-none" placeholder="密码" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} required />
+                            {msg && <p className="text-red-500 text-xs">{msg}</p>}
+                            <button type="submit" className="w-full py-3 bg-black text-white font-bold hover:bg-neon-blue transition-colors">{isLogin ? "进入实验室" : "创建账号"}</button>
+                        </form>
+                        <button onClick={() => setIsLogin(!isLogin)} className="mt-4 text-xs text-gray-500 hover:text-black underline w-full text-center">{isLogin ? "没有账号？去注册" : "已有账号？去登录"}</button>
+                    </div>
+                </div>
+            );
+        };
+
         const AIAssessmentModal = ({ onClose, onResultGenerated, user, saveUserData }) => {
             const [mode, setMode] = React.useState("intro");
             const [loading, setLoading] = React.useState(false);
@@ -578,7 +500,6 @@
             );
         };
 
-        // AIToolkitModal (Update to use dynamic callLLM)
         const AIToolkitModal = ({ onClose, assessmentResult, user }) => {
             const [messages, setMessages] = React.useState([]);
             const [input, setInput] = React.useState("");
@@ -642,48 +563,6 @@
                             </div>
                             <div className="p-4 border-t-2 border-black bg-white flex gap-2"><input type="text" className="flex-1 border-2 border-gray-300 p-2 focus:outline-none focus:border-black font-mono text-sm" placeholder="询问工具使用建议..." value={input} onChange={(e) => setInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleSend()} /><button onClick={handleSend} disabled={loading} className="bg-neon-pink text-white px-4 font-bold border-2 border-transparent hover:border-black hover:bg-white hover:text-black transition-all"><Icons.ArrowRight size={18}/></button></div>
                         </div>
-                    </div>
-                </div>
-            );
-        };
-
-        const AuthModal = ({ onClose, onLogin }) => {
-            const [isLogin, setIsLogin] = React.useState(true);
-            const [username, setUsername] = React.useState("");
-            const [password, setPassword] = React.useState("");
-            const [msg, setMsg] = React.useState("");
-
-            const handleSubmit = async (e) => {
-                e.preventDefault();
-                setMsg("");
-                try {
-                    if (isLogin) {
-                        const user = await AuthService.login(username, password);
-                        onLogin(user);
-                        onClose();
-                    } else {
-                        await AuthService.register(username, password);
-                        setIsLogin(true);
-                        setMsg("注册成功，请登录");
-                    }
-                } catch (err) {
-                    setMsg(err.message);
-                }
-            };
-
-            return (
-                <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-white/80 backdrop-blur-md" onClick={onClose}></div>
-                    <div className="relative bg-white border-2 border-black shadow-2xl p-8 w-full max-w-sm flex flex-col items-center animate-fade-in-up">
-                        <button onClick={onClose} className="absolute top-4 right-4"><Icons.X size={20}/></button>
-                        <h3 className="text-2xl font-black mb-6">{isLogin ? "欢迎回来" : "加入全人实验"}</h3>
-                        <form onSubmit={handleSubmit} className="w-full space-y-4">
-                            <input type="text" placeholder="用户名" className="w-full p-3 border-2 border-gray-200 focus:border-black outline-none transition-colors" value={username} onChange={e => setUsername(e.target.value)} required />
-                            <input type="password" placeholder="密码" className="w-full p-3 border-2 border-gray-200 focus:border-black outline-none transition-colors" value={password} onChange={e => setPassword(e.target.value)} required />
-                            {msg && <p className="text-red-500 text-xs text-center">{msg}</p>}
-                            <button type="submit" className="w-full py-3 bg-black text-white font-bold hover:bg-neon-blue transition-colors">{isLogin ? "登录" : "注册"}</button>
-                        </form>
-                        <button onClick={() => setIsLogin(!isLogin)} className="mt-4 text-xs text-gray-500 hover:text-black underline">{isLogin ? "还没有账号？去注册" : "已有账号？去登录"}</button>
                     </div>
                 </div>
             );
@@ -907,6 +786,7 @@
             );
         };
 
+        // --- Main App Component ---
         const App = () => {
             const [modalContent, setModalContent] = React.useState(null); 
             const [communityModal, setCommunityModal] = React.useState(null); 
@@ -919,13 +799,20 @@
             const [activeCategory, setActiveCategory] = React.useState("all"); 
             const [isTransitioning, setIsTransitioning] = React.useState(false);
             const [activeDocs, setActiveDocs] = React.useState([]);
+            
             const [aiAssessmentOpen, setAiAssessmentOpen] = React.useState(false);
             const [aiToolkitOpen, setAiToolkitOpen] = React.useState(false);
             const [assessmentResult, setAssessmentResult] = React.useState(""); 
+
             const [user, setUser] = React.useState(null); 
             const [authModalOpen, setAuthModalOpen] = React.useState(false);
             const [apiKeyModalOpen, setApiKeyModalOpen] = React.useState(false);
             const [serverStatus, setServerStatus] = React.useState('Checking...');
+
+            // 使用 State 管理数据，以便动态加载
+            const [theories, setTheories] = React.useState(defaultTheories);
+            const [images, setImages] = React.useState(defaultMoodImages);
+            const [actions, setActions] = React.useState(defaultActions);
 
             const theoryScrollRef = React.useRef(null);
             const theoryRafRef = React.useRef(null);
@@ -935,50 +822,143 @@
             const startScrollLeft = React.useRef(0);
             const actionScrollRef = React.useRef(null);
 
+            // 检查服务器状态和加载内容
             React.useEffect(() => {
-                // 检查后端状态
                 fetch(`${BACKEND_URL}/api/status`)
-                    .then(res => res.ok ? setServerStatus('Online') : setServerStatus('Offline'))
+                    .then(res => {
+                        if (res.ok) setServerStatus('Online');
+                        else setServerStatus('Offline');
+                    })
                     .catch(() => setServerStatus('Offline'));
+                
+                // 加载动态内容
+                DataLoader.load().then(data => {
+                    if (data) {
+                        if (data.theories && data.theories.length > 0) {
+                            // 映射后端数据格式，添加图标和样式
+                            setTheories(data.theories.map(t => ({
+                                ...t, 
+                                icon: Icons.Sun, // 默认图标
+                                color: "bg-black text-white", 
+                                textColor: "text-white"
+                            }))); 
+                        }
+                        if (data.images && data.images.length > 0) {
+                            setImages(data.images);
+                        }
+                        if (data.actions && data.actions.length > 0) {
+                            setActions(data.actions);
+                        }
+                    }
+                });
             }, []);
 
+            // 登录后检查 API 配置
             const handleLogin = (userData) => {
                 setUser(userData);
-                if (userData.actionPlan) setAssessmentResult(userData.actionPlan); 
-                if (!userData.apiConfig) setApiKeyModalOpen(true);
+                if (userData.actionPlan) {
+                    setAssessmentResult(userData.actionPlan); 
+                }
+                // 如果没有配置API Key，弹出配置引导
+                if (!userData.apiConfig) {
+                    setApiKeyModalOpen(true);
+                }
             };
-            const handleLogout = () => { setUser(null); setAssessmentResult(""); };
-            const handleSaveApiKey = (config) => { if (user) { const updatedUser = AuthService.saveUserData(user.username, { apiConfig: config }); setUser(updatedUser); } };
-            const checkAuth = (action) => { if (!user) { setAuthModalOpen(true); } else if (!user.apiConfig) { setApiKeyModalOpen(true); } else { action(); } };
+
+            const handleLogout = () => {
+                setUser(null);
+                setAssessmentResult("");
+            };
+
+            const handleSaveApiKey = (config) => {
+                if (user) {
+                    const updatedUser = AuthService.saveUserData(user.username, { apiConfig: config });
+                    setUser(updatedUser);
+                }
+            };
+            
+            const checkAuth = (action) => {
+                if (!user) {
+                    setAuthModalOpen(true);
+                } else if (!user.apiConfig) {
+                    setApiKeyModalOpen(true);
+                } else {
+                    action();
+                }
+            };
 
             const filteredTheories = React.useMemo(() => {
                 let result = [];
                 if (activeCategory === "all") {
                     const uniqueCategories = [...new Set(theories.map(t => t.category))];
                     const grouped = uniqueCategories.map(cat => theories.filter(t => t.category === cat));
-                    const interleaved = []; const maxLen = Math.max(...grouped.map(g => g.length));
-                    for (let i = 0; i < maxLen; i++) { grouped.forEach(group => { if (group[i]) interleaved.push(group[i]); }); }
+                    const interleaved = [];
+                    const maxLen = Math.max(...grouped.map(g => g.length));
+                    for (let i = 0; i < maxLen; i++) {
+                        grouped.forEach(group => { if (group[i]) interleaved.push(group[i]); });
+                    }
                     result = interleaved;
-                } else { result = theories.filter(t => t.category === activeCategory); }
+                } else {
+                    result = theories.filter(t => t.category === activeCategory);
+                }
                 return result;
-            }, [activeCategory]);
+            }, [activeCategory, theories]); // 添加 theories 作为依赖
 
             React.useEffect(() => {
-                const container = theoryScrollRef.current; if (!container || filteredTheories.length === 0) return;
-                const baseSpeed = 0.3; let speed = baseSpeed;
-                const animate = () => { if (!isDraggingTheory.current && container.children.length > 0) { theoryPosRef.current += speed; const maxScroll = container.scrollWidth / 2; if (theoryPosRef.current >= maxScroll) { theoryPosRef.current = 0; } container.scrollLeft = theoryPosRef.current; } theoryRafRef.current = requestAnimationFrame(animate); };
-                theoryPosRef.current = 0; cancelAnimationFrame(theoryRafRef.current); theoryRafRef.current = requestAnimationFrame(animate);
+                const container = theoryScrollRef.current;
+                if (!container || filteredTheories.length === 0) return;
+                const baseSpeed = 0.3;
+                let speed = baseSpeed;
+                const animate = () => {
+                    if (!isDraggingTheory.current && container.children.length > 0) {
+                        theoryPosRef.current += speed;
+                        const maxScroll = container.scrollWidth / 2; 
+                        if (theoryPosRef.current >= maxScroll) { theoryPosRef.current = 0; }
+                        container.scrollLeft = theoryPosRef.current;
+                    }
+                    theoryRafRef.current = requestAnimationFrame(animate);
+                };
+                theoryPosRef.current = 0; 
+                cancelAnimationFrame(theoryRafRef.current);
+                theoryRafRef.current = requestAnimationFrame(animate);
                 return () => cancelAnimationFrame(theoryRafRef.current);
             }, [filteredTheories]); 
 
-            const handleTheoryMouseDown = (e) => { isDraggingTheory.current = true; startX.current = e.pageX || e.touches[0].pageX; startScrollLeft.current = theoryPosRef.current; };
-            const handleTheoryMouseMove = (e) => { if (!isDraggingTheory.current) return; e.preventDefault(); const x = e.pageX || e.touches[0].pageX; const walk = (x - startX.current) * 1.5; theoryPosRef.current = startScrollLeft.current - walk; if (theoryScrollRef.current) theoryScrollRef.current.scrollLeft = theoryPosRef.current; };
+            const handleTheoryMouseDown = (e) => {
+                isDraggingTheory.current = true;
+                startX.current = e.pageX || e.touches[0].pageX;
+                startScrollLeft.current = theoryPosRef.current;
+            };
+
+            const handleTheoryMouseMove = (e) => {
+                if (!isDraggingTheory.current) return;
+                e.preventDefault(); 
+                const x = e.pageX || e.touches[0].pageX;
+                const walk = (x - startX.current) * 1.5; 
+                theoryPosRef.current = startScrollLeft.current - walk;
+                if (theoryScrollRef.current) theoryScrollRef.current.scrollLeft = theoryPosRef.current;
+            };
+
             const handleTheoryMouseUp = () => { isDraggingTheory.current = false; };
-            const handleCategoryChange = (catId) => { if (catId === activeCategory) return; setIsTransitioning(true); setTheoryMenuOpen(false); setTimeout(() => { setActiveCategory(catId); setIsTransitioning(false); }, 300); };
+
+            const handleCategoryChange = (catId) => {
+                if (catId === activeCategory) return;
+                setIsTransitioning(true);
+                setTheoryMenuOpen(false); 
+                setTimeout(() => {
+                    setActiveCategory(catId);
+                    setIsTransitioning(false);
+                }, 300);
+            };
+
             const scrollTo = (id) => { document.getElementById(id).scrollIntoView({ behavior: 'smooth' }); setMobileMenuOpen(false); };
             const openTheory = (theory) => { setModalContent(theory); };
             const openCommunity = (platform) => { setCommunityModal(platform); };
-            const openPdf = (theory) => { if (!activeDocs.find(d => d.id === theory.id)) { setActiveDocs([...activeDocs, { ...theory, isMinimized: false }]); } else { setActiveDocs(activeDocs.map(d => d.id === theory.id ? { ...d, isMinimized: false } : d)); } setModalContent(null); };
+            const openPdf = (theory) => {
+                if (!activeDocs.find(d => d.id === theory.id)) { setActiveDocs([...activeDocs, { ...theory, isMinimized: false }]); } 
+                else { setActiveDocs(activeDocs.map(d => d.id === theory.id ? { ...d, isMinimized: false } : d)); }
+                setModalContent(null); 
+            };
             const minimizePdf = (id) => { setActiveDocs(activeDocs.map(d => d.id === id ? { ...d, isMinimized: true } : d)); };
             const restorePdf = (id) => { setActiveDocs(activeDocs.map(d => d.id === id ? { ...d, isMinimized: false } : d)); };
             const closePdf = (id) => { setActiveDocs(activeDocs.filter(d => d.id !== id)); };
@@ -988,42 +968,221 @@
                     <nav className="fixed w-full z-50 px-6 py-4 flex justify-between items-center glass-nav text-daiqing transition-all">
                         <div className="flex items-center gap-3 group cursor-pointer" onClick={() => scrollTo('lab')}>
                             <div className="bg-white text-black px-2 py-1 transform -rotate-6 text-xl font-graffiti font-bold h-10 w-10 flex items-center justify-center shadow-lg">Oh!</div>
-                            <div className="flex flex-col items-center leading-none"><div className="text-[10px] font-bold tracking-[0.2em] uppercase opacity-80 mb-1 group-hover:text-neon-blue transition-colors">全人实验室</div><div className="font-black text-2xl tracking-tighter text-daiqing">WHOLE</div></div>
+                            <div className="flex flex-col items-center leading-none">
+                                <div className="text-[10px] font-bold tracking-[0.2em] uppercase opacity-80 mb-1 group-hover:text-neon-blue transition-colors">全人实验室</div>
+                                <div className="font-black text-2xl tracking-tighter text-daiqing">WHOLE</div>
+                            </div>
                         </div>
                         <div className="hidden md:flex gap-8 items-center">
-                            {[ { cn: "实验室", en: "LABORATORY", id: "lab" }, { cn: "理论库", en: "THEORY", id: "theory" }, { cn: "行动派", en: "ACTION", id: "action" }].map(item => (<button key={item.id} onClick={() => scrollTo(item.id)} className="flex flex-col items-center group"><span className="font-bold text-base group-hover:text-neon-blue transition-colors">{item.cn}</span><span className="text-[9px] font-bold tracking-widest opacity-60 group-hover:opacity-100 scale-90">{item.en}</span></button>))}
-                            <button onClick={() => scrollTo('community')} className="flex flex-col items-center group bg-black text-white px-4 py-2 rounded-full hover:bg-neon-blue transition-colors shadow-lg"><span className="font-bold text-sm">全人社区</span><span className="text-[8px] font-bold tracking-widest opacity-80">COMMUNITY</span></button>
-                            <button onClick={() => user ? handleLogout() : setAuthModalOpen(true)} className="flex flex-col items-center group bg-daiqing text-white px-4 py-2 rounded-full hover:bg-black transition-colors shadow-lg"><span className="font-bold text-sm">{user ? user.username : "登录 / 注册"}</span><span className="text-[8px] font-bold tracking-widest opacity-80">{user ? "LOGOUT" : "ACCOUNT"}</span></button>
+                            {[ { cn: "实验室", en: "LABORATORY", id: "lab" }, { cn: "理论库", en: "THEORY", id: "theory" }, { cn: "行动派", en: "ACTION", id: "action" }].map(item => (
+                                <button key={item.id} onClick={() => scrollTo(item.id)} className="flex flex-col items-center group">
+                                    <span className="font-bold text-base group-hover:text-neon-blue transition-colors">{item.cn}</span>
+                                    <span className="text-[9px] font-bold tracking-widest opacity-60 group-hover:opacity-100 scale-90">{item.en}</span>
+                                </button>
+                            ))}
+                            <button onClick={() => scrollTo('community')} className="flex flex-col items-center group bg-black text-white px-4 py-2 rounded-full hover:bg-neon-blue transition-colors shadow-lg">
+                                <span className="font-bold text-sm">全人社区</span><span className="text-[8px] font-bold tracking-widest opacity-80">COMMUNITY</span>
+                            </button>
+                            {/* 用户登录按钮 (使用黛青色) */}
+                            <button onClick={() => user ? handleLogout() : setAuthModalOpen(true)} className="flex flex-col items-center group bg-daiqing text-white px-4 py-2 rounded-full hover:bg-black transition-colors shadow-lg">
+                                <span className="font-bold text-sm">{user ? user.username : "登录 / 注册"}</span>
+                                <span className="text-[8px] font-bold tracking-widest opacity-80">{user ? "LOGOUT" : "ACCOUNT"}</span>
+                            </button>
                         </div>
-                        <button className="md:hidden text-daiqing" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>{mobileMenuOpen ? <Icons.X size={24}/> : <Icons.Menu size={24}/>}</button>
-                        {mobileMenuOpen && (<div className="absolute top-full left-0 w-full bg-white/95 backdrop-blur-xl border-b border-gray-100 p-6 flex flex-col gap-6 md:hidden animate-fade-in shadow-xl text-black">{[ { cn: "实验室", en: "LABORATORY", id: "lab" }, { cn: "理论库", en: "THEORY", id: "theory" }, { cn: "行动派", en: "ACTION", id: "action" }, { cn: "全人社区", en: "COMMUNITY", id: "community" } ].map(item => (<button key={item.id} onClick={() => scrollTo(item.id)} className="text-left"><span className="block text-xl font-bold mb-1">{item.cn}</span><span className="block text-xs font-mono-tech text-gray-500 tracking-widest">{item.en}</span></button>))}</div>)}
+                        <button className="md:hidden text-daiqing" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+                            {mobileMenuOpen ? <Icons.X size={24}/> : <Icons.Menu size={24}/>}
+                        </button>
+                        {mobileMenuOpen && (
+                            <div className="absolute top-full left-0 w-full bg-white/95 backdrop-blur-xl border-b border-gray-100 p-6 flex flex-col gap-6 md:hidden animate-fade-in shadow-xl text-black">
+                                {[ { cn: "实验室", en: "LABORATORY", id: "lab" }, { cn: "理论库", en: "THEORY", id: "theory" }, { cn: "行动派", en: "ACTION", id: "action" }, { cn: "全人社区", en: "COMMUNITY", id: "community" } ].map(item => (
+                                    <button key={item.id} onClick={() => scrollTo(item.id)} className="text-left">
+                                        <span className="block text-xl font-bold mb-1">{item.cn}</span><span className="block text-xs font-mono-tech text-gray-500 tracking-widest">{item.en}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </nav>
 
+                    {/* Page 1: 首页 */}
                     <section id="lab" className="min-h-screen flex flex-col justify-center items-center px-6 relative border-b-4 border-black bg-[#f4f4f0]">
-                        <div className="absolute top-0 left-0 w-full h-full overflow-hidden opacity-10 pointer-events-none"><div className="absolute top-20 left-10 text-9xl font-graffiti rotate-12">Broken?</div><div className="absolute bottom-20 right-10 text-9xl font-graffiti -rotate-6">Whole!</div></div>
-                        <div className="max-w-4xl w-full z-10 text-center md:text-left mt-24 md:mt-16"><div className="inline-block bg-black text-white px-4 py-1 mb-6 font-bold tracking-widest text-xs uppercase transform rotate-2">Whole Person Laboratory</div><h1 className="text-6xl md:text-8xl font-black leading-none mb-4 tracking-tighter">Oh! <span className="text-neon-blue italic">Whole</span></h1><h2 className="text-xl md:text-3xl font-bold mb-12 max-w-2xl leading-relaxed">我们被精心塑造为<span className="bg-black text-white px-2 mx-1">完美的零件</span>，<br/>却忘记了如何成为<span className="border-b-4 border-neon-blue px-1 mx-1">完整的人</span>。</h2><div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12"><div className="brutalist-border p-6 bg-white relative"><div className="absolute -top-3 -right-3 w-8 h-8 bg-neon-blue rounded-full"></div><h3 className="font-bold text-xl mb-3 flex items-center gap-2"><Icons.Zap size={20}/> 异化的代价</h3><p className="text-sm text-gray-600 leading-relaxed">教育剪断连接，职场剥夺勇气。这不是你的缺陷，这是现代性设计的系统漏洞。</p></div><div className="brutalist-border p-6 bg-white relative"><div className="absolute -top-3 -right-3 w-8 h-8 bg-kintsugi-gold rounded-full"></div><h3 className="font-bold text-xl mb-3 flex items-center gap-2"><Icons.Puzzle size={20}/> 修复的哲学</h3><p className="text-sm text-gray-600 leading-relaxed">整全性不是完美无瑕，而是有意识的连接。像金缮一样承认裂痕，让微小的行动成为粘合剂。</p></div></div><button onClick={() => scrollTo('theory')} className="group flex items-center gap-2 text-lg font-bold border-b-2 border-black pb-1 hover:text-neon-blue hover:border-neon-blue transition-colors">进入实验室 <Icons.ArrowRight className="group-hover:translate-x-1 transition-transform"/></button></div>
+                        <div className="absolute top-0 left-0 w-full h-full overflow-hidden opacity-10 pointer-events-none">
+                            <div className="absolute top-20 left-10 text-9xl font-graffiti rotate-12">Broken?</div>
+                            <div className="absolute bottom-20 right-10 text-9xl font-graffiti -rotate-6">Whole!</div>
+                        </div>
+                        <div className="max-w-4xl w-full z-10 text-center md:text-left mt-24 md:mt-16">
+                            <div className="inline-block bg-black text-white px-4 py-1 mb-6 font-bold tracking-widest text-xs uppercase transform rotate-2">Whole Person Laboratory</div>
+                            <h1 className="text-6xl md:text-8xl font-black leading-none mb-4 tracking-tighter">Oh! <span className="text-neon-blue italic">Whole</span></h1>
+                            <h2 className="text-xl md:text-3xl font-bold mb-12 max-w-2xl leading-relaxed">我们被精心塑造为<span className="bg-black text-white px-2 mx-1">完美的零件</span>，<br/>却忘记了如何成为<span className="border-b-4 border-neon-blue px-1 mx-1">完整的人</span>。</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
+                                <div className="brutalist-border p-6 bg-white relative">
+                                    <div className="absolute -top-3 -right-3 w-8 h-8 bg-neon-blue rounded-full"></div>
+                                    <h3 className="font-bold text-xl mb-3 flex items-center gap-2"><Icons.Zap size={20}/> 异化的代价</h3>
+                                    <p className="text-sm text-gray-600 leading-relaxed">教育剪断连接，职场剥夺勇气。这不是你的缺陷，这是现代性设计的系统漏洞。</p>
+                                </div>
+                                <div className="brutalist-border p-6 bg-white relative">
+                                    <div className="absolute -top-3 -right-3 w-8 h-8 bg-kintsugi-gold rounded-full"></div>
+                                    <h3 className="font-bold text-xl mb-3 flex items-center gap-2"><Icons.Puzzle size={20}/> 修复的哲学</h3>
+                                    <p className="text-sm text-gray-600 leading-relaxed">整全性不是完美无瑕，而是有意识的连接。像金缮一样承认裂痕，让微小的行动成为粘合剂。</p>
+                                </div>
+                            </div>
+                            <button onClick={() => scrollTo('theory')} className="group flex items-center gap-2 text-lg font-bold border-b-2 border-black pb-1 hover:text-neon-blue hover:border-neon-blue transition-colors">进入实验室 <Icons.ArrowRight className="group-hover:translate-x-1 transition-transform"/></button>
+                        </div>
                     </section>
 
+                    {/* Page 2: 理论流动展示 */}
                     <section id="theory" className="min-h-screen flex flex-col justify-center py-20 bg-white border-b-4 border-black overflow-hidden relative group/theory">
-                        <div className="px-6 mb-12 text-center relative z-10"><h2 className="text-4xl md:text-5xl font-black mb-2 flex justify-center items-center gap-4">THEORY <span className="font-graffiti font-normal text-6xl text-neon-blue">Flow</span></h2><div className={`inline-flex items-center gap-2 px-4 py-1 rounded-full text-xs font-bold uppercase tracking-widest mt-2 transition-all duration-300 ${categories.find(c => c.id === activeCategory).color}`}>{categories.find(c => c.id === activeCategory).name}</div><p className="text-gray-500 mt-4 text-sm">{activeCategory === 'all' ? "点击右侧汉堡菜单，释放不同维度的认知碎片" : categories.find(c => c.id === activeCategory).desc}</p></div>
-                        <div className="absolute right-6 top-24 z-20 flex flex-col gap-4 items-end"><div className="relative"><button onClick={() => { setTheoryMenuOpen(!theoryMenuOpen); setBookListOpen(false); }} className={`w-12 h-12 flex items-center justify-center border-2 border-black transition-all duration-200 rounded-full shadow-lg active:scale-90 ${theoryMenuOpen ? 'bg-black text-white' : 'bg-white text-black hover:bg-black hover:text-white'}`}>{theoryMenuOpen ? <Icons.X size={24}/> : <Icons.Layers size={24} />}</button>{theoryMenuOpen && (<div className="absolute right-0 top-14 w-72 bg-white border-2 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] animate-fade-in origin-top-right overflow-hidden"><div className="p-3 border-b border-black font-bold bg-black text-white text-xs tracking-widest text-center">SELECT DIMENSION</div>{categories.map(cat => (<button key={cat.id} onClick={() => handleCategoryChange(cat.id)} className={`w-full text-left p-4 border-b border-gray-100 last:border-0 flex items-center gap-3 transition-all hover:pl-6 active:scale-95 origin-left ${cat.color}`}><span className={`p-1.5 rounded bg-white/20`}><cat.icon size={16} /></span><div className="flex flex-col"><span className="font-bold text-sm">{cat.name}</span>{cat.id !== 'all' && <span className="text-[10px] opacity-80 font-medium tracking-wide">{cat.desc}</span>}</div></button>))}</div>)}</div><button onClick={() => setBookListOpen(true)} className="w-12 h-12 flex items-center justify-center bg-white border-2 border-black rounded-full shadow-lg hover:bg-neon-pink hover:text-white hover:border-white transition-all" title="共创/推荐"><Icons.Star size={24}/></button></div>
-                        <div className={`transition-opacity duration-300 ${isTransitioning ? 'opacity-0 scale-95' : 'opacity-100 scale-100'}`}><div ref={theoryScrollRef} className="relative w-full mb-8 flex overflow-x-hidden cursor-grab active:cursor-grabbing" onMouseDown={handleTheoryMouseDown} onMouseMove={handleTheoryMouseMove} onMouseUp={handleTheoryMouseUp} onMouseLeave={handleTheoryMouseUp} onTouchStart={handleTheoryMouseDown} onTouchMove={handleTheoryMouseMove} onTouchEnd={handleTheoryMouseUp}><div className="flex flex-nowrap" style={{ width: 'max-content' }}>{[...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories].map((item, idx) => (<div key={`t1-${idx}`} onClick={() => !isDraggingTheory.current && openTheory(item)} className={`card-deal-anim select-none mx-4 px-8 py-8 h-48 w-auto min-w-[280px] flex flex-col items-start justify-between border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-1 hover:shadow-none transition-all whitespace-nowrap ${item.color} ${item.textColor}`}><div className="w-full flex justify-between items-start gap-4"><div className="p-1.5 bg-white/20 rounded-full flex-shrink-0"><item.icon size={18} /></div><span className="font-mono-tech text-[10px] opacity-60 tracking-widest uppercase">No.0{item.id}</span></div><div><div className="text-3xl font-black leading-tight mb-2 pr-4">{item.keyword}</div><div className="text-xs font-bold font-graffiti tracking-wide opacity-80">{item.en}</div></div></div>))}</div></div><div className="relative w-full -rotate-1 pointer-events-none"><div className="flex w-[200%] animate-scroll-reverse hover:[animation-play-state:paused]" style={{ animationDuration: "60s" }}>{[...moodImages, ...moodImages].map((img, idx) => (<div key={`img-${idx}`} className="mx-4 w-80 h-48 border-2 border-black flex-shrink-0 transition-all duration-500 overflow-hidden relative group"><img src={img.src} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 grayscale hover:grayscale-0" alt={img.alt} /><div className="absolute bottom-2 right-2 bg-black text-white text-[10px] px-2 py-1 font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity font-mono-tech">ART.0{idx + 1}</div></div>))}</div></div></div>
+                        <div className="px-6 mb-12 text-center relative z-10">
+                            <h2 className="text-4xl md:text-5xl font-black mb-2 flex justify-center items-center gap-4">THEORY <span className="font-graffiti font-normal text-6xl text-neon-blue">Flow</span></h2>
+                            <div className={`inline-flex items-center gap-2 px-4 py-1 rounded-full text-xs font-bold uppercase tracking-widest mt-2 transition-all duration-300 ${categories.find(c => c.id === activeCategory).color}`}>{categories.find(c => c.id === activeCategory).name}</div>
+                            <p className="text-gray-500 mt-4 text-sm">{activeCategory === 'all' ? "点击右侧汉堡菜单，释放不同维度的认知碎片" : categories.find(c => c.id === activeCategory).desc}</p>
+                        </div>
+                        <div className="absolute right-6 top-24 z-20 flex flex-col gap-4 items-end">
+                            <div className="relative">
+                                <button onClick={() => { setTheoryMenuOpen(!theoryMenuOpen); setBookListOpen(false); }} className={`w-12 h-12 flex items-center justify-center border-2 border-black transition-all duration-200 rounded-full shadow-lg active:scale-90 ${theoryMenuOpen ? 'bg-black text-white' : 'bg-white text-black hover:bg-black hover:text-white'}`}>{theoryMenuOpen ? <Icons.X size={24}/> : <Icons.Layers size={24} />}</button>
+                                {theoryMenuOpen && (
+                                    <div className="absolute right-0 top-14 w-72 bg-white border-2 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] animate-fade-in origin-top-right overflow-hidden">
+                                        <div className="p-3 border-b border-black font-bold bg-black text-white text-xs tracking-widest text-center">SELECT DIMENSION</div>
+                                        {categories.map(cat => (
+                                            <button key={cat.id} onClick={() => handleCategoryChange(cat.id)} className={`w-full text-left p-4 border-b border-gray-100 last:border-0 flex items-center gap-3 transition-all hover:pl-6 active:scale-95 origin-left ${cat.color}`}>
+                                                <span className={`p-1.5 rounded bg-white/20`}><cat.icon size={16} /></span>
+                                                <div className="flex flex-col"><span className="font-bold text-sm">{cat.name}</span>{cat.id !== 'all' && <span className="text-[10px] opacity-80 font-medium tracking-wide">{cat.desc}</span>}</div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <button onClick={() => setBookListOpen(true)} className="w-12 h-12 flex items-center justify-center bg-white border-2 border-black rounded-full shadow-lg hover:bg-neon-pink hover:text-white hover:border-white transition-all" title="共创/推荐"><Icons.Star size={24}/></button>
+                        </div>
+                        <div className={`transition-opacity duration-300 ${isTransitioning ? 'opacity-0 scale-95' : 'opacity-100 scale-100'}`}>
+                            <div ref={theoryScrollRef} className="relative w-full mb-8 flex overflow-x-hidden cursor-grab active:cursor-grabbing" onMouseDown={handleTheoryMouseDown} onMouseMove={handleTheoryMouseMove} onMouseUp={handleTheoryMouseUp} onMouseLeave={handleTheoryMouseUp} onTouchStart={handleTheoryMouseDown} onTouchMove={handleTheoryMouseMove} onTouchEnd={handleTheoryMouseUp}>
+                                <div className="flex flex-nowrap" style={{ width: 'max-content' }}>
+                                    {[...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories, ...filteredTheories].map((item, idx) => (
+                                        <div key={`t1-${idx}`} onClick={() => !isDraggingTheory.current && openTheory(item)} className={`card-deal-anim select-none mx-4 px-8 py-8 h-48 w-auto min-w-[280px] flex flex-col items-start justify-between border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-y-1 hover:shadow-none transition-all whitespace-nowrap ${item.color} ${item.textColor}`}>
+                                            <div className="w-full flex justify-between items-start gap-4">
+                                                <div className="p-1.5 bg-white/20 rounded-full flex-shrink-0"><item.icon size={18} /></div>
+                                                <span className="font-mono-tech text-[10px] opacity-60 tracking-widest uppercase">No.0{item.id}</span>
+                                            </div>
+                                            <div><div className="text-3xl font-black leading-tight mb-2 pr-4">{item.keyword}</div><div className="text-xs font-bold font-graffiti tracking-wide opacity-80">{item.en}</div></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="relative w-full -rotate-1 pointer-events-none">
+                                <div className="flex w-[200%] animate-scroll-reverse hover:[animation-play-state:paused]" style={{ animationDuration: "60s" }}>
+                                    {[...images, ...images].map((img, idx) => (
+                                        <div key={`img-${idx}`} className="mx-4 w-80 h-48 border-2 border-black flex-shrink-0 transition-all duration-500 overflow-hidden relative group">
+                                            <img src={img.src} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 grayscale hover:grayscale-0" alt={img.alt} />
+                                            <div className="absolute bottom-2 right-2 bg-black text-white text-[10px] px-2 py-1 font-bold tracking-widest opacity-0 group-hover:opacity-100 transition-opacity font-mono-tech">ART.0{idx + 1}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
                     </section>
 
+                    {/* Page 3: 整全行动 */}
                     <section id="action" className="min-h-screen py-20 px-6 bg-[#f4f4f0] border-b-4 border-black flex flex-col justify-center">
-                        <div className="max-w-6xl mx-auto w-full"><div className="flex flex-col md:flex-row justify-between items-end mb-12 gap-6"><div><div className="font-bold tracking-widest mb-2 flex items-baseline gap-2"><span className="font-rock text-7xl md:text-8xl leading-none transform -rotate-6 inline-block text-neon-blue mr-2">7</span> <span className="text-xl md:text-2xl text-neon-blue">DAYS ACTION LAB</span></div><h2 className="text-3xl md:text-4xl font-black leading-tight">微小修复，<br/>系统转变。</h2></div><div className="flex flex-col gap-4 max-w-md"><button onClick={() => setActionMenuOpen(true)} className="self-start px-4 py-2 bg-neon-blue text-white font-bold text-xs uppercase tracking-widest border-2 border-black hover:bg-black transition-all shadow-lg flex items-center gap-2 group relative overflow-hidden"><div className="absolute inset-0 w-full h-full bg-white opacity-0 group-hover:opacity-10 transition-opacity"></div><RunningManIcon /> 开启全人实验</button><div className="text-sm md:text-base text-gray-600 font-medium">我们不谈宏大叙事。这里有10个“最小可行性修复方案”。不需要辞职，不需要巨款，只需要7天，找回一点掌控感。</div></div></div><div ref={actionScrollRef} className="flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory scrollbar-hide -mx-6 px-6 md:mx-0 md:px-0">{actions.map((action, idx) => (<div key={action.id} onClick={() => setActiveAction(action)} className="min-w-[300px] md:min-w-[350px] snap-center brutalist-border bg-white p-6 flex flex-col justify-between group hover:border-neon-blue transition-colors cursor-pointer"><div><div className="flex justify-between items-start mb-6"><span className="font-graffiti text-4xl text-gray-300 group-hover:text-black transition-colors">0{action.id}</span><div className="transform scale-75 origin-top-right text-black">{doodleAvatars[idx % doodleAvatars.length]}</div></div><div className="flex gap-1 mb-3">{action.tags.map(tag => (<span key={tag} className="text-[10px] uppercase border border-black px-1.5 py-0.5 rounded-full">{tag}</span>))}</div><h3 className="text-2xl font-bold mb-1">{action.title}</h3><div className="text-xs text-gray-400 uppercase tracking-wider mb-4 font-bold">{action.sub}</div><p className="text-gray-600 text-sm leading-relaxed">{action.desc}</p></div><div className="mt-6 w-full py-3 bg-black text-white font-bold text-center group-hover:bg-neon-blue transition-colors flex items-center justify-center gap-2 text-sm">查看详情 <Icons.ArrowRight size={14}/></div></div>))}<div className="min-w-[300px] md:min-w-[350px] snap-center brutalist-border bg-neon-blue text-white p-6 flex flex-col justify-center items-center text-center relative overflow-hidden group"><div className="absolute inset-0 bg-black opacity-0 group-hover:opacity-10 transition-opacity"></div><h3 className="text-3xl font-black mb-4">Ready?</h3><p className="text-sm mb-6 px-4">不知道从哪里开始？生成你的专属修复方案。</p><a href="#" className="bg-white text-neon-blue px-8 py-3 font-bold border-2 border-transparent hover:border-white hover:bg-transparent hover:text-white transition-all">开启我的整全行动</a></div></div><CustomScrollbar scrollRef={actionScrollRef} /></div>
+                        <div className="max-w-6xl mx-auto w-full">
+                            <div className="flex flex-col md:flex-row justify-between items-end mb-12 gap-6">
+                                <div>
+                                    <div className="font-bold tracking-widest mb-2 flex items-baseline gap-2">
+                                        <span className="font-rock text-7xl md:text-8xl leading-none transform -rotate-6 inline-block text-neon-blue mr-2">7</span> <span className="text-xl md:text-2xl text-neon-blue">DAYS ACTION LAB</span>
+                                    </div>
+                                    <h2 className="text-3xl md:text-4xl font-black leading-tight">微小修复，<br/>系统转变。</h2>
+                                </div>
+                                <div className="flex flex-col gap-4 max-w-md">
+                                    <button onClick={() => setActionMenuOpen(true)} className="self-start px-4 py-2 bg-neon-blue text-white font-bold text-xs uppercase tracking-widest border-2 border-black hover:bg-black transition-all shadow-lg flex items-center gap-2 group relative overflow-hidden">
+                                        <div className="absolute inset-0 w-full h-full bg-white opacity-0 group-hover:opacity-10 transition-opacity"></div>
+                                        <RunningManIcon /> 开启全人实验
+                                    </button>
+                                    <div className="text-sm md:text-base text-gray-600 font-medium">我们不谈宏大叙事。这里有10个“最小可行性修复方案”。不需要辞职，不需要巨款，只需要7天，找回一点掌控感。</div>
+                                </div>
+                            </div>
+                            <div ref={actionScrollRef} className="flex overflow-x-auto gap-6 pb-8 snap-x snap-mandatory scrollbar-hide -mx-6 px-6 md:mx-0 md:px-0">
+                                {actions.map((action, idx) => (
+                                    <div key={action.id} onClick={() => setActiveAction(action)} className="min-w-[300px] md:min-w-[350px] snap-center brutalist-border bg-white p-6 flex flex-col justify-between group hover:border-neon-blue transition-colors cursor-pointer">
+                                        <div>
+                                            <div className="flex justify-between items-start mb-6">
+                                                <span className="font-graffiti text-4xl text-gray-300 group-hover:text-black transition-colors">0{action.id}</span>
+                                                <div className="transform scale-75 origin-top-right text-black">{doodleAvatars[idx % doodleAvatars.length]}</div>
+                                            </div>
+                                            <div className="flex gap-1 mb-3">{action.tags.map(tag => (<span key={tag} className="text-[10px] uppercase border border-black px-1.5 py-0.5 rounded-full">{tag}</span>))}</div>
+                                            <h3 className="text-2xl font-bold mb-1">{action.title}</h3>
+                                            <div className="text-xs text-gray-400 uppercase tracking-wider mb-4 font-bold">{action.sub}</div>
+                                            <p className="text-gray-600 text-sm leading-relaxed">{action.desc}</p>
+                                        </div>
+                                        <div className="mt-6 w-full py-3 bg-black text-white font-bold text-center group-hover:bg-neon-blue transition-colors flex items-center justify-center gap-2 text-sm">查看详情 <Icons.ArrowRight size={14}/></div>
+                                    </div>
+                                ))}
+                                <div className="min-w-[300px] md:min-w-[350px] snap-center brutalist-border bg-neon-blue text-white p-6 flex flex-col justify-center items-center text-center relative overflow-hidden group">
+                                    <div className="absolute inset-0 bg-black opacity-0 group-hover:opacity-10 transition-opacity"></div>
+                                    <h3 className="text-3xl font-black mb-4">Ready?</h3>
+                                    <p className="text-sm mb-6 px-4">不知道从哪里开始？生成你的专属修复方案。</p>
+                                    <a href="#" className="bg-white text-neon-blue px-8 py-3 font-bold border-2 border-transparent hover:border-white hover:bg-transparent hover:text-white transition-all">开启我的整全行动</a>
+                                </div>
+                            </div>
+                            <CustomScrollbar scrollRef={actionScrollRef} />
+                        </div>
                     </section>
 
                     <section id="community" className="py-24 px-6 bg-[#1a1a1a] text-white">
-                        <div className="max-w-4xl mx-auto"><div className="text-center mb-16"><div className="inline-block border-2 border-white px-3 py-1 rounded-full mb-8 font-graffiti text-2xl animate-pulse">You are not alone</div><h2 className="text-5xl md:text-7xl font-black mb-8">Oh! Whole Community</h2><p className="text-xl md:text-2xl text-gray-400 max-w-2xl mx-auto">这不是社交俱乐部，这是<span className="text-white underline decoration-neon-blue decoration-4 underline-offset-4">修复伙伴</span>的营地。<br/>互助、见证、不比较。</p></div><div className="grid grid-cols-3 gap-3 md:gap-6 max-w-4xl mx-auto mb-12">{[ { id: 'wechat', nameCn: "微信社群", nameEn: "WECHAT GROUP", icon: <Icons.WeChat size={28}/> }, { id: 'xhs', nameCn: "小红书", nameEn: "XIAOHONGSHU", icon: <Icons.XiaoHongShu size={28}/> }, { id: 'mp', nameCn: "微信公众号", nameEn: "OFFICIAL ACCOUNT", icon: <Icons.WeChat size={28}/> }, ].map((platform) => (<button key={platform.id} onClick={() => openCommunity(platform)} className="flex flex-col items-center justify-center aspect-square border border-gray-700 hover:border-white hover:bg-gray-800 transition-all rounded-xl p-2 md:p-4 group"><div className="text-gray-300 group-hover:text-white transition-colors mb-2 md:mb-4 transform group-hover:scale-110 duration-300"><div className="scale-75 md:scale-100">{platform.icon}</div></div><span className="text-xs md:text-lg font-light tracking-wide">{platform.nameCn}</span><span className="text-[8px] md:text-[10px] font-thin uppercase tracking-widest text-gray-500 mt-1 md:mt-2 scale-75 md:scale-100 origin-center text-nowrap">{platform.nameEn}</span></button>))}</div><div className="max-w-2xl mx-auto text-center border-t border-gray-800 pt-12 pb-8"><div onClick={() => setFounderModalOpen(true)} className="cursor-pointer group inline-block"><BearLogo className="w-16 h-16 mx-auto mb-6 text-gray-500 opacity-80 group-hover:text-white group-hover:scale-110 transition-all" /></div><h4 className="text-lg font-bold mb-6 text-gray-400 font-sans tracking-widest">发起人自白</h4><div className="prose prose-sm mx-auto text-gray-400 font-sans font-light tracking-wide leading-loose space-y-6 px-4 text-justify"><p>我是<span className="text-gray-300 font-normal border-b border-gray-600 pb-0.5">大X不会水</span>，目前正在一个公益组织开展青年发展的实践和研究。发起这个实验性行动时，我也是一个修复中的个体。我的技能曾分散在设计、写作、技术、研究、产品之间，彼此孤立。而我的兴趣也曾碎片化，每个都无法深入。</p><p>这个行动既是工具箱，也是我自己的修复记录。这些工具是我为自己开发的脚手架。而这个社群则是我为自己寻找同路人的途径。</p><p className="text-gray-300 italic border-l-2 border-gray-600 pl-4 py-2 my-6">“修复不是到达完美，而是在不完美中建立连接。<br/>完整不是没有裂痕，而是裂痕被连接成独特图案。”</p><p>欢迎你加入「全人实验室」，重新走向整全的自己，这里倡导行动者的互助，不做非在场的社交。</p></div></div><footer className="text-gray-600 text-xs flex flex-col md:flex-row justify-center items-center gap-4 mt-8 pt-8 border-t border-gray-900">
-                        <span>© 2025 Oh! Whole Lab.</span><span className="hidden md:block">|</span><span>Design for Integrity.</span>
-                        <span className={`ml-4 px-2 py-0.5 rounded text-[10px] ${serverStatus === 'Online' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                            Server: {serverStatus}
-                        </span>
-                    </footer></div></section>
+                        <div className="max-w-4xl mx-auto">
+                            <div className="text-center mb-16">
+                                <div className="inline-block border-2 border-white px-3 py-1 rounded-full mb-8 font-graffiti text-2xl animate-pulse">You are not alone</div>
+                                <h2 className="text-5xl md:text-7xl font-black mb-8">Oh! Whole Community</h2>
+                                <p className="text-xl md:text-2xl text-gray-400 max-w-2xl mx-auto">这不是社交俱乐部，这是<span className="text-white underline decoration-neon-blue decoration-4 underline-offset-4">修复伙伴</span>的营地。<br/>互助、见证、不比较。</p>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3 md:gap-6 max-w-4xl mx-auto mb-12">
+                                {[ 
+                                    { id: 'wechat', nameCn: "微信社群", nameEn: "WECHAT GROUP", icon: <Icons.WeChat size={28}/> }, 
+                                    { id: 'xhs', nameCn: "小红书", nameEn: "XIAOHONGSHU", icon: <Icons.XiaoHongShu size={28}/> }, 
+                                    { id: 'mp', nameCn: "微信公众号", nameEn: "OFFICIAL ACCOUNT", icon: <Icons.WeChat size={28}/> }, 
+                                ].map((platform) => (
+                                    <button key={platform.id} onClick={() => openCommunity(platform)} className="flex flex-col items-center justify-center aspect-square border border-gray-700 hover:border-white hover:bg-gray-800 transition-all rounded-xl p-2 md:p-4 group">
+                                        <div className="text-gray-300 group-hover:text-white transition-colors mb-2 md:mb-4 transform group-hover:scale-110 duration-300"><div className="scale-75 md:scale-100">{platform.icon}</div></div>
+                                        <span className="text-xs md:text-lg font-light tracking-wide">{platform.nameCn}</span>
+                                        <span className="text-[8px] md:text-[10px] font-thin uppercase tracking-widest text-gray-500 mt-1 md:mt-2 scale-75 md:scale-100 origin-center text-nowrap">{platform.nameEn}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            <div className="max-w-2xl mx-auto text-center border-t border-gray-800 pt-12 pb-8">
+                                <div onClick={() => setFounderModalOpen(true)} className="cursor-pointer group inline-block">
+                                    <BearLogo className="w-16 h-16 mx-auto mb-6 text-gray-500 opacity-80 group-hover:text-white group-hover:scale-110 transition-all" />
+                                </div>
+                                <h4 className="text-lg font-bold mb-6 text-gray-400 font-sans tracking-widest">发起人自白</h4>
+                                <div className="prose prose-sm mx-auto text-gray-400 font-sans font-light tracking-wide leading-loose space-y-6 px-4 text-justify">
+                                    <p>我是<span className="text-gray-300 font-normal border-b border-gray-600 pb-0.5">大X不会水</span>，目前正在一个公益组织开展青年发展的实践和研究。发起这个实验性行动时，我也是一个修复中的个体。我的技能曾分散在设计、写作、技术、研究、产品之间，彼此孤立。而我的兴趣也曾碎片化，每个都无法深入。</p>
+                                    <p>这个行动既是工具箱，也是我自己的修复记录。这些工具是我为自己开发的脚手架。而这个社群则是我为自己寻找同路人的途径。</p>
+                                    <p className="text-gray-300 italic border-l-2 border-gray-600 pl-4 py-2 my-6">“修复不是到达完美，而是在不完美中建立连接。<br/>完整不是没有裂痕，而是裂痕被连接成独特图案。”</p>
+                                    <p>欢迎你加入「全人实验室」，重新走向整全的自己，这里倡导行动者的互助，不做非在场的社交。</p>
+                                </div>
+                            </div>
+                            <footer className="text-gray-600 text-xs flex flex-col md:flex-row justify-center items-center gap-4 mt-8 pt-8 border-t border-gray-900">
+                                <span>© 2025 Oh! Whole Lab.</span><span className="hidden md:block">|</span><span>Design for Integrity.</span>
+                                <span className={`ml-4 px-2 py-0.5 rounded text-[10px] ${serverStatus === 'Online' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                    Server: {serverStatus}
+                                </span>
+                            </footer>
+                        </div>
+                    </section>
 
                     {activeAction && <ActionModal action={activeAction} onClose={() => setActiveAction(null)} />}
-                    {modalContent && (<div className="fixed inset-0 z-[100] flex items-center justify-center p-4"><div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setModalContent(null)}></div><div className={`relative border-4 border-black shadow-[8px_8px_0px_0px_rgba(255,255,255,0.5)] max-w-lg w-full p-8 transform rotate-1 ${modalContent.color} ${modalContent.textColor}`}><button onClick={() => setModalContent(null)} className="absolute top-4 right-4 hover:rotate-90 transition-transform"><Icons.X size={24}/></button><div className="inline-block px-3 py-1 text-xs font-bold mb-6 border border-current bg-white/20">THEORY SOURCE</div><h3 className="text-4xl font-black mb-2">{modalContent.keyword}</h3><div className="text-sm font-bold opacity-80 mb-6 font-mono">Book: {modalContent.book} <br/>Author: {modalContent.author}</div><p className="text-lg leading-relaxed font-bold mb-6">“{modalContent.desc}”</p><div className="bg-black/10 p-4 rounded mb-8 text-sm leading-relaxed backdrop-blur-sm border border-black/5"><span className="font-bold block mb-1">THEORY BRIEF:</span>{modalContent.intro}</div><div className="flex justify-end items-center mt-4"><button onClick={() => openPdf(modalContent)} className={`px-6 py-2 font-bold border-2 flex items-center gap-2 hover:-translate-y-1 transition-transform shadow-[4px_4px_0px_0px_rgba(0,0,0,0.5)] ${modalContent.textColor === 'text-white' ? 'bg-white text-black border-black' : 'bg-black text-white border-white'}`}><Icons.Book size={16}/> 阅读原典 PDF</button></div></div></div>)}
+                    {modalContent && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setModalContent(null)}></div>
+                            <div className={`relative border-4 border-black shadow-[8px_8px_0px_0px_rgba(255,255,255,0.5)] max-w-lg w-full p-8 transform rotate-1 ${modalContent.color} ${modalContent.textColor}`}>
+                                <button onClick={() => setModalContent(null)} className="absolute top-4 right-4 hover:rotate-90 transition-transform"><Icons.X size={24}/></button>
+                                <div className="inline-block px-3 py-1 text-xs font-bold mb-6 border border-current bg-white/20">THEORY SOURCE</div>
+                                <h3 className="text-4xl font-black mb-2">{modalContent.keyword}</h3>
+                                <div className="text-sm font-bold opacity-80 mb-6 font-mono">Book: {modalContent.book} <br/>Author: {modalContent.author}</div>
+                                <p className="text-lg leading-relaxed font-bold mb-6">“{modalContent.desc}”</p>
+                                <div className="bg-black/10 p-4 rounded mb-8 text-sm leading-relaxed backdrop-blur-sm border border-black/5"><span className="font-bold block mb-1">THEORY BRIEF:</span>{modalContent.intro}</div>
+                                <div className="flex justify-end items-center mt-4">
+                                    <button onClick={() => openPdf(modalContent)} className={`px-6 py-2 font-bold border-2 flex items-center gap-2 hover:-translate-y-1 transition-transform shadow-[4px_4px_0px_0px_rgba(0,0,0,0.5)] ${modalContent.textColor === 'text-white' ? 'bg-white text-black border-black' : 'bg-black text-white border-white'}`}><Icons.Book size={16}/> 阅读原典 PDF</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
                     {bookListOpen && <BookListModal onClose={() => setBookListOpen(false)} />}
                     {activeDocs.map(doc => !doc.isMinimized && (<PdfReader key={doc.id} doc={doc} onClose={() => closePdf(doc.id)} onMinimize={() => minimizePdf(doc.id)}/>))}
                     <FloatingDock minimizedDocs={activeDocs.filter(d => d.isMinimized)} onRestore={restorePdf}/>
@@ -1034,7 +1193,14 @@
                     {authModalOpen && <AuthModal onClose={() => setAuthModalOpen(false)} onLogin={handleLogin} />}
                     {apiKeyModalOpen && <ApiKeyModal onClose={() => setApiKeyModalOpen(false)} onSave={handleSaveApiKey} />}
                     
-                    {actionMenuOpen && (<WholeActionMenuModal onClose={() => setActionMenuOpen(false)} onOpenAssessment={() => checkAuth(() => setAiAssessmentOpen(true))} onOpenToolkit={() => checkAuth(() => setAiToolkitOpen(true))} />)}
+                    {actionMenuOpen && (
+                        <WholeActionMenuModal 
+                            onClose={() => setActionMenuOpen(false)} 
+                            onOpenAssessment={() => checkAuth(() => setAiAssessmentOpen(true))} 
+                            onOpenToolkit={() => checkAuth(() => setAiToolkitOpen(true))} 
+                        />
+                    )}
+                    
                     {founderModalOpen && <FounderContactModal onClose={() => setFounderModalOpen(false)} />}
                     <CrackedBallFAB onClick={() => setActionMenuOpen(true)} />
                 </div>
